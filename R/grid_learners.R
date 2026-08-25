@@ -145,7 +145,13 @@ lnr_glmnet_grid <- function(data, formula, weights = NULL, lambda, ...) {
   yvar <- as.character(formula[[2]])
   formula_without_lhs <- formula
   formula_without_lhs[2] <- NULL
-  xdata <- model.matrix.default(formula_without_lhs, data = data)
+  # Preserve unused factor levels so their indicator columns are retained
+  # (and contain only zeros when no observation has that level).
+	factor_levels <- lapply(data, function(x) {
+		if (is.factor(x)) levels(x) else NULL
+	})
+	factor_levels <- factor_levels[!vapply(factor_levels, is.null, logical(1))]
+	xdata <- model.matrix.default(formula_without_lhs, data = data, xlev = factor_levels)
   if (yvar %in% colnames(xdata)) {
     yvar_idx <- which(colnames(xdata) == yvar)
     xdata <- xdata[,-yvar_idx]
@@ -172,7 +178,7 @@ lnr_glmnet_grid <- function(data, formula, weights = NULL, lambda, ...) {
       # contain the outcome variable at prediction time
       formula_without_lhs <- formula
       formula_without_lhs[2] <- NULL
-      new_xdata <- model.matrix.default(formula_without_lhs, data = newdata)
+      new_xdata <- model.matrix.default(formula_without_lhs, data = newdata, xlev = factor_levels)
       # note: the generic predict() is used (rather than
       # glmnet::predict.glmnet directly) so that S3 dispatch reaches
       # predict.lognet for binomial fits, where type = 'response' converts

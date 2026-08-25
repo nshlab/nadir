@@ -77,7 +77,13 @@ lnr_glmnet <- function(data, formula, weights = NULL, lambda = .2, ...) {
   yvar <- as.character(formula[[2]])
   formula_without_lhs <- formula
   formula_without_lhs[2] <- NULL
-  xdata <- model.matrix.default(formula_without_lhs, data = data)
+  # Preserve unused factor levels so their indicator columns are retained
+  # (and contain only zeros when no observation has that level).
+	factor_levels <- lapply(data, function(x) {
+		if (is.factor(x)) levels(x) else NULL
+	})
+	factor_levels <- factor_levels[!vapply(factor_levels, is.null, logical(1))]
+  xdata <- model.matrix.default(formula_without_lhs, data = data, xlev = factor_levels)
   if (yvar %in% colnames(xdata)) {
     yvar_idx <- which(colnames(xdata) == yvar)
     xdata <- xdata[,-yvar_idx]
@@ -112,7 +118,7 @@ lnr_glmnet <- function(data, formula, weights = NULL, lambda = .2, ...) {
     # without the lhs to use for constructing the model matrix for prediction.
     formula_without_lhs <- formula
     formula_without_lhs[2] <- NULL
-    xdata <- model.matrix.default(formula_without_lhs, data = newdata)
+    xdata <- model.matrix.default(formula_without_lhs, data = newdata, xlev = factor_levels)
 
     # use the s3 generic predict() here
     preds <- predict(model, newx = xdata, type = "response")
@@ -162,7 +168,13 @@ lnr_cvglmnet <- function(data, formula, weights = NULL, lambda = NULL, ...) {
   yvar <- as.character(formula[[2]])
   formula_without_lhs <- formula
   formula_without_lhs[2] <- NULL
-  xdata <- model.matrix.default(formula_without_lhs, data = data)
+  # Preserve unused factor levels so their indicator columns are retained
+  # (and contain only zeros when no observation has that level).
+	factor_levels <- lapply(data, function(x) {
+		if (is.factor(x)) levels(x) else NULL
+	})
+	factor_levels <- factor_levels[!vapply(factor_levels, is.null, logical(1))]
+  xdata <- model.matrix.default(formula_without_lhs, data = data, xlev = factor_levels)
   if (yvar %in% colnames(xdata)) {
     yvar_idx <- which(colnames(xdata) == yvar)
     xdata <- xdata[,-yvar_idx]
@@ -181,7 +193,7 @@ lnr_cvglmnet <- function(data, formula, weights = NULL, lambda = NULL, ...) {
     # use for constructing the model matrix for prediction purposes.
     formula_without_lhs <- formula
     formula_without_lhs[2] <- NULL
-    xdata = model.matrix.default(formula_without_lhs, data = newdata)
+    xdata = model.matrix.default(formula_without_lhs, data = newdata, xlev = factor_levels)
 
     # construct the arguments for `predict.cv.glmnet`
     predict_args <- c(
