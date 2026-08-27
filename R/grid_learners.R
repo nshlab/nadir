@@ -243,7 +243,16 @@ lnr_hal_grid <- function(data, formula, weights = NULL, lambda, ...) {
   lambda <- validate_lambda_grid(lambda, 'lnr_hal_grid')
 
   yvar <- as.character(formula[[2]])
-  xdata <- stats::model.matrix.lm(formula, data = data, na.action = 'na.pass')
+
+  # Preserve unused factor levels so their indicator columns are retained
+  # (and contain only zeros when no observation has that level).
+  factor_levels <- lapply(data, function(x) {
+    if (is.factor(x)) levels(x) else NULL
+  })
+  factor_levels <- factor_levels[!vapply(factor_levels, is.null, logical(1))]
+  xdata <- stats::model.matrix.default(formula, data = data, xlev = factor_levels,
+                                  na.action = 'na.pass')
+
 
   # cv_select must be FALSE so that fit_hal retains the fit at every lambda in
   # the grid; merge it into any user-supplied fit_control rather than
@@ -273,21 +282,51 @@ cv.glmnet select a single lambda internally, use lnr_hal instead.")
   prediction_cache$newdata <- NULL
 
   predict_matrix_for <- function(newdata) {
-    if (! identical(prediction_cache$newdata, newdata)) {
-      # ensure the y-variable isn't required inside the model matrix call
+    if (!identical(prediction_cache$newdata, newdata)) {
+
+      # Ensure the outcome variable is not required when constructing
+      # the prediction model matrix.
       prediction_formula <- formula
       if (length(prediction_formula) >= 3) {
         prediction_formula[2] <- NULL
       }
-      new_xdata <- stats::model.matrix.lm(
-        prediction_formula, data = newdata, na.action = 'na.pass')
-      predictions <- predict(object = model, new_data = new_xdata,
-                             type = 'response')
-      # with a length-1 lambda grid, predict may return a vector; standardize
-      predictions <- as.matrix(predictions)
+
+      new_xdata <- stats::model.matrix.default(
+        prediction_formula,
+        data = newdata,
+        na.action = "na.pass",
+        xlev = factor_levels
+      )
+
+      predictions <- predict(
+        object = model,
+        new_data = new_xdata,
+        type = "response"
+      )
+
+      # hal9001::predict() may simplify dimensions when there is only one
+      # observation or only one lambda. Internally we always require an
+      # n_observations x n_lambda matrix.
+      expected_length <- nrow(new_xdata) * length(lambda)
+
+      if (length(predictions) != expected_length) {
+        stop(
+          "lnr_hal_grid received an unexpected number of predictions from ",
+          "hal9001::predict(): expected ", expected_length,
+          " but received ", length(predictions), "."
+        )
+      }
+
+      predictions <- matrix(
+        as.numeric(predictions),
+        nrow = nrow(new_xdata),
+        ncol = length(lambda)
+      )
+
       prediction_cache$newdata <- newdata
       prediction_cache$predictions <- predictions
     }
+
     prediction_cache$predictions
   }
 
