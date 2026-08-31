@@ -77,7 +77,13 @@ lnr_glmnet <- function(data, formula, weights = NULL, lambda = .2, ...) {
   yvar <- as.character(formula[[2]])
   formula_without_lhs <- formula
   formula_without_lhs[2] <- NULL
-  xdata <- model.matrix.default(formula_without_lhs, data = data)
+  # Preserve unused factor levels so their indicator columns are retained
+  # (and contain only zeros when no observation has that level).
+	factor_levels <- lapply(data, function(x) {
+		if (is.factor(x)) levels(x) else NULL
+	})
+	factor_levels <- factor_levels[!vapply(factor_levels, is.null, logical(1))]
+  xdata <- model.matrix.default(formula_without_lhs, data = data, xlev = factor_levels)
   if (yvar %in% colnames(xdata)) {
     yvar_idx <- which(colnames(xdata) == yvar)
     xdata <- xdata[,-yvar_idx]
@@ -112,7 +118,7 @@ lnr_glmnet <- function(data, formula, weights = NULL, lambda = .2, ...) {
     # without the lhs to use for constructing the model matrix for prediction.
     formula_without_lhs <- formula
     formula_without_lhs[2] <- NULL
-    xdata <- model.matrix.default(formula_without_lhs, data = newdata)
+    xdata <- model.matrix.default(formula_without_lhs, data = newdata, xlev = factor_levels)
 
     # use the s3 generic predict() here
     preds <- predict(model, newx = xdata, type = "response")
@@ -162,7 +168,13 @@ lnr_cvglmnet <- function(data, formula, weights = NULL, lambda = NULL, ...) {
   yvar <- as.character(formula[[2]])
   formula_without_lhs <- formula
   formula_without_lhs[2] <- NULL
-  xdata <- model.matrix.default(formula_without_lhs, data = data)
+  # Preserve unused factor levels so their indicator columns are retained
+  # (and contain only zeros when no observation has that level).
+	factor_levels <- lapply(data, function(x) {
+		if (is.factor(x)) levels(x) else NULL
+	})
+	factor_levels <- factor_levels[!vapply(factor_levels, is.null, logical(1))]
+  xdata <- model.matrix.default(formula_without_lhs, data = data, xlev = factor_levels)
   if (yvar %in% colnames(xdata)) {
     yvar_idx <- which(colnames(xdata) == yvar)
     xdata <- xdata[,-yvar_idx]
@@ -181,7 +193,7 @@ lnr_cvglmnet <- function(data, formula, weights = NULL, lambda = NULL, ...) {
     # use for constructing the model matrix for prediction purposes.
     formula_without_lhs <- formula
     formula_without_lhs[2] <- NULL
-    xdata = model.matrix.default(formula_without_lhs, data = newdata)
+    xdata = model.matrix.default(formula_without_lhs, data = newdata, xlev = factor_levels)
 
     # construct the arguments for `predict.cv.glmnet`
     predict_args <- c(
@@ -461,11 +473,22 @@ attr(lnr_glmer, 'outcome_type_dependent_args') <- list(
 #' @examples
 #' suppressWarnings({
 #' # hal prints a lot of messages about some threads not reaching convergence
-#' lnr_hal(mtcars, mpg ~ hp)(mtcars)
+#' lnr_hal(mtcars, mpg ~ hp + am + cyl + disp)(mtcars)
 #' })
 lnr_hal <- function(data, formula, weights = NULL, lambda = NULL, ...) {
   yvar <- as.character(formula[[2]])
-  xdata <- stats::model.matrix.lm(formula, data = data, na.action = 'na.pass')
+
+  # Preserve unused factor levels so their indicator columns are retained
+  # (and contain only zeros when no observation has that level).
+  factor_levels <- lapply(data, function(x) {
+    if (is.factor(x)) levels(x) else NULL
+  })
+  factor_levels <- factor_levels[!vapply(factor_levels, is.null, logical(1))]
+
+  xdata <- stats::model.matrix.default(formula,
+                                       data = data,
+                                       xlev = factor_levels,
+                                       na.action = 'na.pass')
 
   # if the user specifies a single lambda value, cv_select needs to be FALSE:
   # fit_hal's default (cv_select = TRUE) gives lambda to cv.glmnet, which errors
@@ -491,7 +514,12 @@ lnr_hal <- function(data, formula, weights = NULL, lambda = NULL, ...) {
     if (length(formula) >= 3) {
       formula[2] <- NULL
     }
-    xdata = stats::model.matrix.lm(formula, data = newdata, na.action = 'na.pass')
+
+    xdata <- stats::model.matrix.default(formula,
+                                         data = newdata,
+                                         na.action = 'na.pass',
+                                         xlev = factor_levels)
+
     predictions <- predict(object = model, new_data = xdata, type = 'response')
     # if fit_hal retained fits at multiple lambda values (a grid of lambdas
     # plus user-supplied fit_control = list(cv_select = FALSE)), predictions

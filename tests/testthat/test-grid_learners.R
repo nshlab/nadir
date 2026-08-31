@@ -158,3 +158,281 @@ test_that("as_multi_predictor validates its input", {
     as_multi_predictor(list(a = function(x) x, a = function(x) x)),
     'unique, nonempty names')
 })
+
+
+
+# Rare factor-level handling ----
+
+test_that("glmnet learners handle factor levels absent from training observations", {
+  dat <- data.frame(
+    y = seq_len(20) + sin(seq_len(20)),
+    x = seq(-1, 1, length.out = 20),
+    rare_factor = factor(
+      c(rep("common", 19), "rare"),
+      levels = c("common", "rare")
+    )
+  )
+
+  # The rare level has zero observations in training, but remains a valid
+  # factor level. Its model-matrix column should therefore be retained as
+  # an all-zero column.
+  train <- dat[dat$rare_factor == "common", , drop = FALSE]
+
+  expect_identical(
+    levels(train$rare_factor),
+    c("common", "rare")
+  )
+  expect_equal(
+    unname(table(train$rare_factor)[["rare"]]),
+    0
+  )
+
+  # Deliberately give prediction datasets whose factors each contain only
+  # one level. The learner must reconstruct the training-time factor levels
+  # rather than constructing incompatible model matrices.
+  common_newdata <- data.frame(
+    x = 0.25,
+    rare_factor = factor("common")
+  )
+
+  rare_newdata <- data.frame(
+    x = 0.25,
+    rare_factor = factor("rare")
+  )
+
+  # Single-lambda glmnet learner
+  glmnet_predictor <- lnr_glmnet(
+    train,
+    y ~ x + rare_factor,
+    lambda = 0.1
+  )
+
+  pred_common <- glmnet_predictor(common_newdata)
+  pred_rare <- glmnet_predictor(rare_newdata)
+
+  expect_length(pred_common, 1)
+  expect_length(pred_rare, 1)
+  expect_true(is.finite(pred_common))
+  expect_true(is.finite(pred_rare))
+
+  # The rare-factor column was identically zero during training, so glmnet
+  # cannot have learned a nonzero contribution from it.
+  expect_equal(
+    unname(pred_common),
+    unname(pred_rare),
+    tolerance = 1e-10
+  )
+
+  # Grid glmnet learner
+  glmnet_grid <- lnr_glmnet_grid(
+    train,
+    y ~ x + rare_factor,
+    lambda = c(0.01, 0.1, 0.5)
+  )
+
+  grid_common <- vapply(
+    glmnet_grid,
+    function(predictor) predictor(common_newdata),
+    numeric(1)
+  )
+
+  grid_rare <- vapply(
+    glmnet_grid,
+    function(predictor) predictor(rare_newdata),
+    numeric(1)
+  )
+
+  expect_true(all(is.finite(grid_common)))
+  expect_true(all(is.finite(grid_rare)))
+
+  # Same zero-variation-column property should hold along the entire path.
+  expect_equal(
+    unname(grid_common),
+    unname(grid_rare),
+    tolerance = 1e-10
+  )
+})
+
+
+test_that("HAL learners handle factor levels absent from training observations", {
+  skip_if_not_installed("hal9001")
+
+  dat <- data.frame(
+    y = seq_len(30) + sin(seq_len(30)),
+    x = seq(-1, 1, length.out = 30),
+    rare_factor = factor(
+      c(rep("common", 29), "rare"),
+      levels = c("common", "rare")
+    )
+  )
+
+  train <- dat[dat$rare_factor == "common", , drop = FALSE]
+
+  expect_identical(
+    levels(train$rare_factor),
+    c("common", "rare")
+  )
+  expect_equal(
+    unname(table(train$rare_factor)[["rare"]]),
+    0
+  )
+
+  common_newdata <- data.frame(
+    x = 0.25,
+    rare_factor = factor("common")
+  )
+
+  rare_newdata <- data.frame(
+    x = 0.25,
+    rare_factor = factor("rare")
+  )
+
+  suppressWarnings({
+    hal_predictor <- lnr_hal(
+      train,
+      y ~ x + rare_factor,
+      lambda = 0.1,
+      max_degree = 1,
+      num_knots = 3
+    )
+  })
+
+  pred_common <- hal_predictor(common_newdata)
+  pred_rare <- hal_predictor(rare_newdata)
+
+  expect_length(pred_common, 1)
+  expect_length(pred_rare, 1)
+  expect_true(is.numeric(pred_common))
+  expect_true(is.numeric(pred_rare))
+  expect_true(is.finite(pred_common))
+  expect_true(is.finite(pred_rare))
+
+  suppressWarnings({
+    hal_grid <- lnr_hal_grid(
+      train,
+      y ~ x + rare_factor,
+      lambda = c(0.01, 0.1),
+      max_degree = 1,
+      num_knots = 3
+    )
+  })
+
+  grid_common <- vapply(
+    hal_grid,
+    function(predictor) predictor(common_newdata),
+    numeric(1)
+  )
+
+  grid_rare <- vapply(
+    hal_grid,
+    function(predictor) predictor(rare_newdata),
+    numeric(1)
+  )
+
+  expect_true(all(is.finite(grid_common)))
+  expect_true(all(is.finite(grid_rare)))
+})
+
+
+test_that("glmnet grid works in super_learner when CV folds omit rare factor levels", {
+  dat <- data.frame(
+    y = 2 * seq(-1, 1, length.out = 21) +
+      sin(seq_len(21)),
+    x = seq(-1, 1, length.out = 21),
+    rare_factor = factor(
+      c(rep("common", 20), "rare"),
+      levels = c("common", "rare")
+    )
+  )
+
+  # Construct folds deliberately so that:
+  #
+  # * fold 1 validation contains the only rare observation;
+  # * fold 1 training therefore has zero observed rare levels;
+  # * every validation dataset is droplevels()'d, so the factor metadata
+  #   available at prediction time contains only the level actually observed
+  #   in that validation fold.
+  #
+  # This recreates the model-matrix mismatch the xlev handling is intended
+  # to prevent.
+  rare_factor_cv_schema <- function(data, n_folds) {
+    stopifnot(n_folds == 3)
+
+    fold_id <- c(
+      rep(2L, 10),
+      rep(3L, 10),
+      1L
+    )
+
+    training_data <- lapply(
+      seq_len(n_folds),
+      function(i) {
+        data[fold_id != i, , drop = FALSE]
+      }
+    )
+
+    validation_data <- lapply(
+      seq_len(n_folds),
+      function(i) {
+        droplevels(data[fold_id == i, , drop = FALSE])
+      }
+    )
+
+    list(
+      training_data = training_data,
+      validation_data = validation_data
+    )
+  }
+
+  sl_model <- super_learner(
+    data = dat,
+    formulas = y ~ x + rare_factor,
+    learners = list(
+      mean = lnr_mean,
+      glmnet_grid = lnr_glmnet_grid
+    ),
+    extra_learner_args = list(
+      NULL,
+      list(lambda = c(0.01, 0.1))
+    ),
+    n_folds = 3,
+    cv_schema = rare_factor_cv_schema
+  )
+
+  # glmnet_grid should survive every fold rather than being removed as an
+  # erring learner.
+  expect_equal(
+    sum(grepl(
+      "^glmnet_grid_lambda_",
+      names(sl_model$learner_weights)
+    )),
+    2
+  )
+
+  glmnet_prediction_cols <- grep(
+    "^glmnet_grid_lambda_",
+    colnames(sl_model$holdout_predictions),
+    value = TRUE
+  )
+
+  expect_length(glmnet_prediction_cols, 2)
+
+  expect_true(all(is.finite(
+    as.matrix(
+      sl_model$holdout_predictions[
+        , glmnet_prediction_cols, drop = FALSE
+      ]
+    )
+  )))
+
+  # The final full-data learner should likewise be able to predict on a
+  # one-row dataset whose factor has only the rare level in its metadata.
+  rare_newdata <- droplevels(
+    dat[nrow(dat), c("x", "rare_factor"), drop = FALSE]
+  )
+
+  final_prediction <- sl_model$predict(rare_newdata)
+
+  expect_length(final_prediction, 1)
+  expect_true(is.finite(final_prediction))
+})
