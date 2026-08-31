@@ -144,7 +144,7 @@ determine_weights_using_neg_log_loss <- function(data, y_variable, obs_weights =
     # now take our loss function and return it, to optimize against it
     negative_log_predicted_densities <- -log(predicted_densities) # negative_log_loss(predicted_densities)
 
-    if (! is.null(obs_weights) & length(weights) == nrow(data)) {
+    if (! is.null(obs_weights)) {
       negative_log_predicted_densities <- negative_log_predicted_densities * obs_weights
     }
     return(sum(negative_log_predicted_densities))

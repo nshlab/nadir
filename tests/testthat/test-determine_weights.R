@@ -54,22 +54,53 @@ test_that("determine_weights_using_neg_log_loss validates obs_weights length", {
   )
 })
 
-test_that("determine_weights_using_neg_log_loss applies obs_weights in square case", {
-  # obs_weights only multiply the loss when length(weights) == nrow(data),
-  # which requires as many rows as learners; craft such a case
-  set.seed(1)
-  square_data <- data.frame(
-    a = c(0.5, 0.6, 0.7),
-    b = c(0.4, 0.5, 0.6),
-    c = c(0.3, 0.4, 0.5),
-    y = c(1, 0, 1)
+test_that("neg-log-loss weights respond to obs_weights on normally-shaped data", {
+  # regression test: obs_weights used to be applied only when
+  # ncol(data) == nrow(data); here 2 learners, 100 rows.
+  # column values are predicted densities of the observed outcome:
+  # learner a assigns high density on the first half of rows, low on the
+  # second half; learner b is the reverse.
+  n <- 100
+  d <- data.frame(
+    a = c(rep(0.9, n / 2), rep(0.1, n / 2)),
+    b = c(rep(0.1, n / 2), rep(0.9, n / 2)),
+    y = rnorm(n)  # values unused; densities are already of the observed y
   )
-  w <- determine_weights_using_neg_log_loss(
-    square_data, y_variable = "y", obs_weights = c(1, 2, 3)
-  )
-  expect_length(w, 3)
-  expect_equal(sum(w), 1, tolerance = 1e-6)
+  w_first  <- c(rep(5, n / 2), rep(0.2, n / 2))
+  w_second <- rev(w_first)
+
+  w1 <- determine_weights_using_neg_log_loss(d, "y", obs_weights = w_first)
+  w2 <- determine_weights_using_neg_log_loss(d, "y", obs_weights = w_second)
+
+  expect_equal(sum(w1), 1, tolerance = 1e-6)
+  expect_equal(sum(w2), 1, tolerance = 1e-6)
+  # under equal weighting the learners are symmetric; the observation
+  # weights must break the tie decisively
+  expect_gt(w1[1], w2[1])
+  expect_gt(w1[1], 0.5)
+  expect_lt(w2[1], 0.5)
 })
+
+test_that("binary-outcome weights respond to obs_weights (delegation regression test)", {
+  n <- 100
+  y <- rep(c(1, 0), each = n / 2)
+  d <- data.frame(
+    # learner a is confident-and-right on the first half (y = 1),
+    # uninformative on the second; learner b is the reverse
+    a = c(rep(0.95, n / 2), rep(0.5, n / 2)),
+    b = c(rep(0.5, n / 2), rep(0.05, n / 2)),
+    y = y
+  )
+  w_first  <- c(rep(5, n / 2), rep(0.2, n / 2))
+  w_second <- rev(w_first)
+
+  w1 <- determine_weights_for_binary_outcomes(d, "y", obs_weights = w_first)
+  w2 <- determine_weights_for_binary_outcomes(d, "y", obs_weights = w_second)
+
+  expect_equal(sum(w1), 1, tolerance = 1e-6)
+  expect_gt(w1[1], w2[1])
+})
+
 
 test_that("determine_weights_for_binary_outcomes transforms and weights probabilities", {
   predicted_probabilities <- data.frame(
