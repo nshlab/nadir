@@ -588,14 +588,18 @@ use_complete_cases = TRUE.")
   }
 
   # construct output
+  # construct output
   output <- list(
     predict = predict_from_super_learned_model,
     y_variable = y_variable,
     fit_learners = fit_learners,
     outcome_type = outcome_type,
     learner_weights = learner_weights,
-    holdout_predictions = second_stage_SL_dataset
-    )
+    holdout_predictions = second_stage_SL_dataset,
+    formulas = formulas,   # per-learner formulas after parse_formulas()
+    n_folds = n_folds,
+    n_obs = nrow(data)
+  )
   # tag the verbose output as such for use in compare_learners() and similar
   class(output) <- "nadir_sl_model"
 

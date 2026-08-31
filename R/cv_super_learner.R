@@ -20,6 +20,13 @@
 #'   A loss metric should take two (vector) arguments:
 #'   predictions, and true outcomes, and produce a single statistic summarizing the
 #'   performance of each learner. Defaults to nadir's internal mean-squared-error function.
+#' @param inner_n_folds Number of folds used by the inner
+#'   \code{super_learner()} on each outer training split to estimate
+#'   ensemble weights. Defaults to \code{n_folds}, matching the historical
+#'   behavior in which one fold count governed both.
+#' @param inner_cv_schema Optional \code{cv_schema} for the inner
+#'   \code{super_learner()} calls; defaults to \code{cv_schema} when one is
+#'   supplied, and otherwise to \code{super_learner()}'s own defaults.
 #'
 #' @returns A list containing \code{$trained_learners} and \code{$cv_loss} which
 #'   respectively include 1) the trained super learner models on each fold of the data, their holdout predictions and,
@@ -40,78 +47,119 @@ cv_super_learner <- function(
     n_folds = 5,
     determine_super_learner_weights = NULL,
     ensemble_or_discrete = c('ensemble', 'discrete'),
-    cv_schema = cv_random_schema,
+    cv_schema = NULL,
     outcome_type = c('continuous', 'binary', 'density', 'multiclass'),
     extra_learner_args = NULL,
     cluster_ids = NULL,
     strata_ids = NULL,
     weights = NULL,
-    loss_metric,
-    use_complete_cases = FALSE) {
+    loss_metric = NULL,
+    use_complete_cases = FALSE,
+    inner_n_folds = NULL,
+    inner_cv_schema = NULL) {
 
   ensemble_or_discrete <- match.arg(ensemble_or_discrete)
   outcome_type <- match.arg(outcome_type)
 
+  # legacy validations, retained verbatim: these exact messages are asserted
+  # in tests/testthat/test-compare_and_cv_super_learner.R, and pre-validating
+  # here errors earlier and more clearly than crossfit's equivalents.
   if (length(n_folds) > 1) {
     stop("n_folds must be a length 1 numeric value.")
   }
   if (! is.null(cluster_ids) & length(cluster_ids) != nrow(data)) {
     stop("the cluster_ids should be equal in length to nrow(data)")
   }
-
   if (! is.null(strata_ids) & length(strata_ids) != nrow(data)) {
     stop("the strata_ids should be equal in length to nrow(data)")
   }
-
   if (! is.null(y_variable) & length(y_variable) > 1) {
     stop("y_variable, if provided, must be a length 1 character string.")
   }
 
-  # extract the y-variable explicitly
-  y_variable <- extract_y_variable(
-    formulas = formulas,
-    data_colnames = colnames(data),
-    learner_names = names(learners),
-    y_variable = y_variable
-  )
-
-  if (is.null(determine_super_learner_weights) || missing(determine_super_learner_weights)) {
-    determine_super_learner_weights <-
-      default_determine_weights(outcome_type = outcome_type)
+  # historical behavior: one fold count governed both the outer evaluation
+  # split and the inner ensemble-weight estimation; keep that as the default
+  # while letting users decouple them.
+  if (is.null(inner_n_folds)) {
+    inner_n_folds <- n_folds
+  }
+  # historical behavior: a user-supplied cv_schema applied to both the outer
+  # split and the inner super_learner() calls.
+  if (! is.null(cv_schema) && is.null(inner_cv_schema)) {
+    inner_cv_schema <- cv_schema
   }
 
-  # build a closure version of the super learner specified
-  sl_closure <- function(data) {
-
-    super_learner(
-      data = data,
-      learners = learners,
-      formulas = formulas,
-      y_variable = y_variable,
-      n_folds = n_folds,
-      determine_super_learner_weights = determine_super_learner_weights,
-      ensemble_or_discrete = ensemble_or_discrete,
-      cv_schema = cv_schema,
-      outcome_type = outcome_type,
-      extra_learner_args = extra_learner_args,
-      cluster_ids = cluster_ids,
-      strata_ids = strata_ids,
-      weights = weights,
-      use_complete_cases = use_complete_cases)
+  if (is.null(loss_metric)) {
+    message(
+      paste0(
+        "The loss_metric is being inferred based on the outcome_type=",
+        outcome_type, " -> using ",
+        switch(outcome_type,
+               'continuous' = 'CV-MSE',
+               'binary' = 'negative log likelihood loss',
+               'density' = 'negative log density loss',
+               'multiclass' = 'negative log likelihood loss')))
+    loss_metric <- default_loss_metric(outcome_type)
   }
 
-  # return the output of cv_super_learner_internal; i.e., run cross-validation
-  # over sl_closure
-  cv_super_learner_internal(
+  # one engine: all fold construction, fitting, prediction, and loss
+  # computation happens inside crossfit_super_learner(), so the two entry
+  # points cannot drift apart.
+  cf <- crossfit_super_learner(
     data = data,
-    sl_closure = sl_closure,
+    learners = learners,
+    formulas = formulas,
     y_variable = y_variable,
     n_folds = n_folds,
+    inner_n_folds = inner_n_folds,
+    determine_super_learner_weights = determine_super_learner_weights,
+    ensemble_or_discrete = ensemble_or_discrete,
     cv_schema = cv_schema,
+    inner_cv_schema = inner_cv_schema,
+    outcome_type = outcome_type,
+    extra_learner_args = extra_learner_args,
+    cluster_ids = cluster_ids,
+    strata_ids = strata_ids,
+    weights = weights,
     loss_metric = loss_metric,
-    outcome_type = outcome_type)
+    use_complete_cases = use_complete_cases)
+
+  # reconstruct the historical cv_trained_learners tibble; per-fold held-out
+  # predictions are recovered from the out-of-fold vector and the fold row
+  # indices (no re-prediction needed).
+  oof <- cf$oof_predictions()
+  per_fold_predictions <- lapply(cf$fold_rows, function(rows) oof[rows])
+
+  cv_trained_learners <- tibble::tibble(
+    split = seq_len(cf$n_folds),
+    learned_predictor = lapply(cf$sl_fits, function(fit) fit$predict),
+    predictions = per_fold_predictions)
+  cv_trained_learners[[cf$y_variable]] <- lapply(
+    cf$validation_data, function(d) d[[cf$y_variable]])
+
+  output <- list(
+    cv_trained_learners = cv_trained_learners,
+    cv_loss = cf$cv_loss,
+    crossfit = cf)
+  class(output) <- "nadir_cv_sl"
+  output
 }
 
+
+#' @export
+print.nadir_cv_sl <- function(x, ...) {
+  cf <- x$crossfit
+  cat("Cross-validated Super Learner (nadir_cv_sl)\n")
+  cat("  outcome:      ", cf$y_variable, " (", cf$outcome_type, ")\n", sep = "")
+  cat("  outer folds:  ", cf$n_folds,
+      "   inner CV folds: ", cf$inner_n_folds, "\n", sep = "")
+  if (!is.na(x$cv_loss)) {
+    cat("  cross-validated loss on held-out data: ",
+        format(x$cv_loss, digits = 5), "\n", sep = "")
+  }
+  cat("Access: $cv_trained_learners, $cv_loss, $crossfit\n")
+  invisible(x)
+}
 
 
 #' Apply Cross-Validation to a Super Learner Closure
@@ -202,12 +250,7 @@ cv_super_learner_internal <- function(
         )
       )
     )
-    switch(outcome_type,
-           "continuous" = { loss_metric <- mse },
-           "binary" = { loss_metric <- negative_log_loss_for_binary },
-           "density" = { loss_metric <- negative_log_loss },
-           "multiclass" = { loss_metric <- negative_log_loss }
-    )
+    loss_metric <- default_loss_metric(outcome_type)
   }
   cv_loss <- loss_metric(prediction_comparison_to_validation[['predictions']], prediction_comparison_to_validation[[y_variable]])
 
