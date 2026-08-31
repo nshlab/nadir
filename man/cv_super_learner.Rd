@@ -12,14 +12,16 @@ cv_super_learner(
   n_folds = 5,
   determine_super_learner_weights = NULL,
   ensemble_or_discrete = c("ensemble", "discrete"),
-  cv_schema = cv_random_schema,
+  cv_schema = NULL,
   outcome_type = c("continuous", "binary", "density", "multiclass"),
   extra_learner_args = NULL,
   cluster_ids = NULL,
   strata_ids = NULL,
   weights = NULL,
-  loss_metric,
-  use_complete_cases = FALSE
+  loss_metric = NULL,
+  use_complete_cases = FALSE,
+  inner_n_folds = NULL,
+  inner_cv_schema = NULL
 )
 }
 \arguments{
@@ -60,6 +62,15 @@ performance of each learner. Defaults to nadir's internal mean-squared-error fun
 
 \item{use_complete_cases}{(default: FALSE) If the \code{data} passed have any NA or NaN missing data, restrict the \code{data} to
 \code{data[complete.cases(data),]}.}
+
+\item{inner_n_folds}{Number of folds used by the inner
+\code{super_learner()} on each outer training split to estimate
+ensemble weights. Defaults to \code{n_folds}, matching the historical
+behavior in which one fold count governed both.}
+
+\item{inner_cv_schema}{Optional \code{cv_schema} for the inner
+\code{super_learner()} calls; defaults to \code{cv_schema} when one is
+supplied, and otherwise to \code{super_learner()}'s own defaults.}
 }
 \value{
 A list containing \code{$trained_learners} and \code{$cv_loss} which
