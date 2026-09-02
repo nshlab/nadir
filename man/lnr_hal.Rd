@@ -44,7 +44,7 @@ candidate learner, use \code{lnr_hal_grid}.
 \examples{
 suppressWarnings({
 # hal prints a lot of messages about some threads not reaching convergence
-lnr_hal(mtcars, mpg ~ hp)(mtcars)
+lnr_hal(mtcars, mpg ~ hp + am + cyl + disp)(mtcars)
 })
 }
 \seealso{

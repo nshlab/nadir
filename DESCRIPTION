@@ -30,6 +30,7 @@ Suggests:
     palmerpenguins,
     rmarkdown,
     survival,
+    srr,
     testthat (>= 3.0.0),
     withr
 VignetteBuilder: knitr
