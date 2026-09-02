@@ -124,3 +124,16 @@ test_that("determine_weights_for_binary_outcomes transforms and weights probabil
 
   expect_equal(sum(w2), 1, tolerance = 1e-6)
 })
+
+test_that("nnls falls back to equal weights when all learners get zero weight", {
+  # a learner whose predictions are anti-correlated with y earns an NNLS
+  # coefficient of exactly 0; normalization must not produce NaN (0/0)
+  set.seed(33)
+  y <- rnorm(50)
+  d <- data.frame(a = -y + rnorm(50, sd = 0.1), y = y)
+  expect_warning(
+    w <- determine_super_learner_weights_nnls(d, "y"),
+    "zero weight to every learner")
+  expect_equal(unname(w), 1)
+  expect_false(anyNA(w))
+})

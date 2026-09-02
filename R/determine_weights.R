@@ -65,6 +65,14 @@ determine_super_learner_weights_nnls <- function(data, y_variable, obs_weights =
     b = b)
 
   model_weights <- nnls_output$x
+  if (sum(model_weights) <= 0) {
+    warning(
+      "Non-negative least squares assigned zero weight to every learner ",
+      "(their held-out predictions are non-positively correlated with the ",
+      "outcome). Falling back to equal weights across learners; consider ",
+      "including an intercept-like learner such as lnr_mean in the library.")
+    model_weights <- rep(1, ncol(A))
+  }
   model_weights <- model_weights / sum(model_weights)
   return(model_weights)
 }
